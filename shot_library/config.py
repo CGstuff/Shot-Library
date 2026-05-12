@@ -1,0 +1,654 @@
+"""
+Global configuration for Shot Library
+
+Forked from Action Library and adapted for shot production visibility.
+"""
+
+import os
+import json
+from pathlib import Path
+from typing import Final, Optional, Union
+
+
+class Config:
+    """Central configuration class for all application settings"""
+
+    # Application metadata
+    APP_NAME: Final[str] = "Shot Library"
+
+    # Try to read version from version.txt (injected by build system)
+    _version_file = Path(__file__).parent / "version.txt"
+    if _version_file.exists():
+        APP_VERSION: Final[str] = _version_file.read_text().strip()
+    else:
+        APP_VERSION: Final[str] = "1.0.0"  # Fallback/Dev version
+
+    APP_AUTHOR: Final[str] = "CGstuff"
+    ORG_NAME: Final[str] = "CGstuff"
+
+    # Paths
+    APP_ROOT: Final[Path] = Path(__file__).parent
+    ASSETS_DIR: Final[Path] = APP_ROOT.parent / "assets"
+    ICONS_DIR: Final[Path] = ASSETS_DIR / "icons"
+    FONTS_DIR: Final[Path] = ASSETS_DIR / "fonts"
+    STYLES_DIR: Final[Path] = ASSETS_DIR / "styles"
+
+    # Database configuration
+    DATABASE_VERSION: Final[int] = 1
+    DEFAULT_DB_NAME: Final[str] = "database.db"
+
+    # Performance settings (Hybrid plan + Maya-inspired)
+    PIXMAP_CACHE_SIZE_KB: Final[int] = 512 * 1024  # 512 MB
+    THUMBNAIL_THREAD_COUNT: Final[int] = 4  # Background workers
+    BATCH_SIZE: Final[int] = 100  # Items to load per batch
+
+    # UI settings
+    DEFAULT_CARD_SIZE: Final[int] = 160  # Grid mode card size
+    MIN_CARD_SIZE: Final[int] = 80
+    MAX_CARD_SIZE: Final[int] = 300
+    CARD_SIZE_STEP: Final[int] = 20
+
+    DEFAULT_VIEW_MODE: Final[str] = "grid"  # "grid" or "list"
+    LIST_ROW_HEIGHT: Final[int] = 50  # Compact list mode (was 60)
+
+    # Hover video preview settings
+    HOVER_VIDEO_DELAY_MS: Final[int] = 500  # Delay before showing popup (ms)
+    HOVER_VIDEO_SIZE: Final[int] = 300  # Popup size in pixels
+    HOVER_VIDEO_POSITION: Final[str] = "cursor"  # "cursor", "right", "left", "above", "below"
+    HOVER_VIDEO_FADE_DURATION: Final[int] = 200  # Fade animation duration (ms)
+    HOVER_VIDEO_AUTO_HIDE_DELAY: Final[int] = 0  # 0 = hide when mouse leaves, >0 = auto-hide after N ms
+    HOVER_VIDEO_FOLLOW_MOUSE: Final[bool] = True  # Follow mouse movement
+
+    # Thumbnail settings
+    THUMBNAIL_SIZE: Final[int] = 300  # Max size for stored thumbnails
+    PREVIEW_VIDEO_FPS: Final[int] = 30
+    PREVIEW_VIDEO_DURATION_SEC: Final[int] = 3
+
+    # Theme settings
+    DEFAULT_THEME: Final[str] = "dark"  # "light" or "dark"
+
+    # Default gradient colors (if no custom gradient set)
+    DEFAULT_GRADIENT_TOP: Final[tuple] = (0.25, 0.35, 0.55)  # Normalized RGB
+    DEFAULT_GRADIENT_BOTTOM: Final[tuple] = (0.5, 0.5, 0.5)
+
+    # Window settings
+    DEFAULT_WINDOW_WIDTH: Final[int] = 1400
+    DEFAULT_WINDOW_HEIGHT: Final[int] = 900
+    DEFAULT_SPLITTER_SIZES: Final[list] = [250, 800, 350]  # Left, center, right
+
+    # Folder tree settings (Shot Library only uses Home, Recent, Favorites)
+    VIRTUAL_FOLDERS: Final[list] = [
+        "Home",
+        "Recent",
+        "Favorites",
+    ]
+
+    # Performance monitoring (Maya-inspired)
+    ENABLE_PERFORMANCE_LOGGING: Final[bool] = True
+    LOG_EVERY_N_THUMBNAILS: Final[int] = 100
+
+    # Feature flags
+    ENABLE_HOVER_VIDEO: Final[bool] = False  # Disabled for clean cards
+    ENABLE_DRAG_DROP: Final[bool] = False  # Shot Library is read-only
+    ENABLE_MULTI_SELECT: Final[bool] = True
+
+    # Database schema
+    DB_SCHEMA_VERSION: Final[int] = 1
+
+    # ==================== SHOT LIBRARY SPECIFIC ====================
+    # Folder Observer settings
+    FOLDER_OBSERVER_DEBOUNCE_MS: Final[int] = 250
+    FOLDER_OBSERVER_POLLING_INTERVAL_MS: Final[int] = 2000
+    FOLDER_OBSERVER_MAX_EVENTS_PER_BATCH: Final[int] = 1000
+
+    # Playblast settings
+    PLAYBLAST_FOLDER_NAME: Final[str] = "PlayBlast"
+
+    # Shot card display
+    SHOT_CARD_ASPECT_RATIO: Final[float] = 16 / 9
+
+    # Media engine settings
+    MEDIA_ENGINE_TARGET_FPS: Final[int] = 30
+    MEDIA_ENGINE_BUFFER_FRAMES: Final[int] = 3
+    MEDIA_ENGINE_THUMBNAIL_SIZE: Final[tuple] = (300, 169)  # 16:9
+    MEDIA_ENGINE_MIN_SPEED: Final[float] = 0.25
+    MEDIA_ENGINE_MAX_SPEED: Final[float] = 4.0
+
+    # Review sidecar file
+    REVIEW_SIDECAR_FILENAME: Final[str] = ".shot_review.json"
+
+    # Shot status values (must match Pipeline Control)
+    SHOT_STATUS_WIP: Final[str] = "WIP"
+    SHOT_STATUS_IN_REVIEW: Final[str] = "In Review"
+    SHOT_STATUS_NEEDS_WORK: Final[str] = "Needs Work"
+    SHOT_STATUS_APPROVED: Final[str] = "Approved"
+    SHOT_STATUS_FINAL: Final[str] = "Final"
+    SHOT_STATUS_BLOCKED: Final[str] = "Blocked"
+    
+    # All valid statuses (for validation)
+    SHOT_STATUSES: Final[tuple] = ("WIP", "In Review", "Needs Work", "Approved", "Final", "Blocked")
+
+    # Storage structure (Shot Library is read-only, points to production folders)
+    META_FOLDER_NAME: Final[str] = ".meta"          # Databases and config
+    CACHE_FOLDER_NAME: Final[str] = ".cache"        # Thumbnails and previews
+
+    @classmethod
+    def get_user_data_dir(cls) -> Path:
+        """
+        Get user data directory.
+        
+        Uses system AppData/Local (Windows) or .local/share (Linux)
+        to ensure settings persist across application updates.
+        """
+        import sys
+        
+        # Check if we should override with portable mode (optional flag file)
+        # If 'portable.txt' exists next to exe, stick to local folder
+        portable_flag = cls.APP_ROOT.parent / 'portable.txt'
+        if portable_flag.exists():
+            user_dir = cls.APP_ROOT.parent / 'data'
+        else:
+            # Standard persistent storage
+            if sys.platform == 'win32':
+                base_path = Path(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')))
+                user_dir = base_path / 'ShotLibrary'
+            elif sys.platform == 'darwin':
+                user_dir = Path.home() / 'Library' / 'Application Support' / 'ShotLibrary'
+            else:
+                # Linux / Unix
+                user_dir = Path.home() / '.local' / 'share' / 'ShotLibrary'
+
+        user_dir.mkdir(parents=True, exist_ok=True)
+        return user_dir
+
+    @classmethod
+    def get_database_folder(cls) -> Path:
+        """Get the database folder path (.meta folder at library root)."""
+        library_path = cls.load_library_path()
+        if library_path and library_path.exists():
+            meta_folder = library_path / cls.META_FOLDER_NAME
+            meta_folder.mkdir(parents=True, exist_ok=True)
+            return meta_folder
+        else:
+            # Fallback to user data dir if no library configured
+            db_folder = cls.get_user_data_dir() / cls.META_FOLDER_NAME
+            db_folder.mkdir(parents=True, exist_ok=True)
+            return db_folder
+
+    @classmethod
+    def get_meta_folder(cls) -> Path:
+        """Get the .meta folder path (alias for get_database_folder)."""
+        return cls.get_database_folder()
+
+    @classmethod
+    def get_database_path(cls) -> Path:
+        """Get full path to database file (in .meta folder)"""
+        return cls.get_database_folder() / cls.DEFAULT_DB_NAME
+
+    @classmethod
+    def get_cache_dir(cls) -> Path:
+        """Get cache directory for thumbnails and previews"""
+        cache_dir = cls.get_user_data_dir() / 'cache'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
+
+    @classmethod
+    def get_thumbnails_dir(cls) -> Path:
+        """Get thumbnails directory"""
+        thumb_dir = cls.get_cache_dir() / 'thumbnails'
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        return thumb_dir
+
+    @classmethod
+    def get_previews_dir(cls) -> Path:
+        """Get video previews directory"""
+        preview_dir = cls.get_cache_dir() / 'previews'
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        return preview_dir
+
+    @classmethod
+    def get_settings_file(cls) -> Path:
+        """Get settings JSON file path"""
+        return cls.get_user_data_dir() / 'settings.json'
+
+    # Library Path Settings
+    LIBRARY_CONFIG_FILE: Final[str] = "library_path.txt"
+
+    # Recent Folders Settings
+    RECENT_FOLDERS_FILE: Final[str] = "recent_folders.json"
+    MAX_RECENT_FOLDERS: Final[int] = 10
+
+    # Blender Integration Settings
+    BLENDER_CONFIG_FILE: Final[str] = "blender_settings.json"
+    DEFAULT_ADDON_FOLDER_NAME: Final[str] = "SL_blender_plugin"
+    QUEUE_POLL_INTERVAL_MS: Final[int] = 500  # Blender poll frequency
+    QUEUE_CHECK_INTERVAL_MS: Final[int] = 5000  # UI queue check frequency
+    QUEUE_NOTIFICATION_DELAY_MS: Final[int] = 200  # Delay before processing notifications
+    QUEUE_MAX_AGE_SECONDS: Final[int] = 300  # Auto-cleanup old requests
+
+    @classmethod
+    def get_blender_settings_file(cls) -> Path:
+        """Get Blender settings JSON file path"""
+        return cls.get_user_data_dir() / cls.BLENDER_CONFIG_FILE
+
+    @classmethod
+    def load_blender_settings(cls) -> dict:
+        """
+        Load Blender integration settings
+
+        Returns:
+            dict: Blender settings with keys:
+                - blender_exe_path: str (path to blender.exe)
+                - launch_mode: str ('PRODUCTION' or 'DEVELOPMENT')
+                - script_path: str (path to run.py for dev mode)
+                - python_exe: str (Python executable for dev mode)
+        """
+        settings_file = cls.get_blender_settings_file()
+        if settings_file.exists():
+            try:
+                import json
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass  # Return defaults below
+
+        # Return defaults if file doesn't exist or error occurred
+        return {
+            'blender_exe_path': '',
+            'launch_mode': 'PRODUCTION',
+            'script_path': '',
+            'python_exe': 'python',
+            'socket_port': 9876
+        }
+
+    @classmethod
+    def save_blender_settings(cls, settings: dict) -> bool:
+        """
+        Save Blender integration settings
+
+        Args:
+            settings: dict with Blender configuration
+
+        Returns:
+            bool: True if saved successfully, False otherwise
+        """
+        try:
+            import json
+            settings_file = cls.get_blender_settings_file()
+            settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def get_blender_path(cls) -> Optional[str]:
+        """
+        Get saved Blender executable path.
+
+        Returns:
+            str: Path to Blender executable, or None if not configured
+        """
+        settings = cls.load_blender_settings()
+        path = settings.get('blender_exe_path', '')
+        return path if path else None
+
+    @classmethod
+    def set_blender_path(cls, path: str) -> bool:
+        """
+        Save Blender executable path.
+
+        Args:
+            path: Path to Blender executable
+
+        Returns:
+            bool: True if saved successfully
+        """
+        settings = cls.load_blender_settings()
+        settings['blender_exe_path'] = str(path)
+        return cls.save_blender_settings(settings)
+
+    @classmethod
+    def get_library_config_path(cls) -> Path:
+        """Get library path configuration file"""
+        return cls.get_user_data_dir() / cls.LIBRARY_CONFIG_FILE
+
+    @classmethod
+    def load_library_path(cls) -> Optional[Path]:
+        """
+        Load saved library path from config file.
+
+        For backward compatibility, this now returns the last active folder
+        from recent folders list.
+
+        Returns:
+            Path: Library path if configured and exists, None otherwise
+        """
+        # First check recent folders (new system)
+        last_active = cls.get_last_active_folder()
+        if last_active:
+            return last_active
+
+        # Fall back to legacy config file
+        config_file = cls.get_library_config_path()
+        if config_file.exists():
+            try:
+                path_str = config_file.read_text(encoding='utf-8').strip()
+                if path_str and Path(path_str).exists():
+                    # Migrate to new system
+                    cls.add_recent_folder(path_str)
+                    return Path(path_str)
+            except Exception:
+                pass
+
+        # Default: check if 'storage' folder exists in app directory
+        default_storage = cls.APP_ROOT.parent / 'storage'
+        if default_storage.exists():
+            # Save it for next time
+            cls.add_recent_folder(default_storage)
+            return default_storage
+
+        return None
+
+    @classmethod
+    def save_library_path(cls, path: Union[str, Path]) -> bool:
+        """
+        Save library path to config file
+
+        Args:
+            path: Path to animation library folder
+
+        Returns:
+            bool: True if saved successfully, False otherwise
+        """
+        try:
+            config_file = cls.get_library_config_path()
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            config_file.write_text(str(path), encoding='utf-8')
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def is_first_run(cls) -> bool:
+        """
+        Check if this is the first time the application is running.
+
+        Returns:
+            True if no library path is configured
+        """
+        return cls.load_library_path() is None
+
+    # ==================== RECENT FOLDERS ====================
+
+    @classmethod
+    def get_recent_folders_path(cls) -> Path:
+        """Get path to recent folders JSON file."""
+        return cls.get_user_data_dir() / cls.RECENT_FOLDERS_FILE
+
+    @classmethod
+    def load_recent_folders(cls) -> dict:
+        """
+        Load recent folders from config file.
+
+        Returns:
+            dict: {"recent": ["path1", ...], "last_active": "path1"}
+        """
+        config_file = cls.get_recent_folders_path()
+        if config_file.exists():
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        # Filter to only existing paths
+                        valid = [p for p in data.get('recent', []) if Path(p).exists()]
+                        last = data.get('last_active')
+                        if last and not Path(last).exists():
+                            last = valid[0] if valid else None
+                        return {'recent': valid[:cls.MAX_RECENT_FOLDERS], 'last_active': last}
+            except Exception:
+                pass
+        return {'recent': [], 'last_active': None}
+
+    @classmethod
+    def add_recent_folder(cls, path: Union[str, Path]) -> bool:
+        """
+        Add/move folder to top of recent list, set as last active.
+
+        Args:
+            path: Folder path to add
+
+        Returns:
+            bool: True if saved successfully
+        """
+        path_str = str(path)
+        data = cls.load_recent_folders()
+
+        # Remove if already exists (will re-add at top)
+        if path_str in data['recent']:
+            data['recent'].remove(path_str)
+
+        # Add to top
+        data['recent'].insert(0, path_str)
+        data['recent'] = data['recent'][:cls.MAX_RECENT_FOLDERS]
+        data['last_active'] = path_str
+
+        return cls._save_recent_folders(data)
+
+    @classmethod
+    def remove_recent_folder(cls, path: Union[str, Path]) -> bool:
+        """
+        Remove a folder from the recent list.
+
+        Args:
+            path: Folder path to remove
+
+        Returns:
+            bool: True if removed and saved successfully
+        """
+        path_str = str(path)
+        data = cls.load_recent_folders()
+
+        if path_str in data['recent']:
+            data['recent'].remove(path_str)
+
+            # Update last_active if it was the removed folder
+            if data['last_active'] == path_str:
+                data['last_active'] = data['recent'][0] if data['recent'] else None
+
+            return cls._save_recent_folders(data)
+
+        return False
+
+    @classmethod
+    def get_last_active_folder(cls) -> Optional[Path]:
+        """
+        Get the last active folder path.
+
+        Returns:
+            Path if exists, None otherwise
+        """
+        data = cls.load_recent_folders()
+        last = data.get('last_active')
+        return Path(last) if last and Path(last).exists() else None
+
+    @classmethod
+    def _save_recent_folders(cls, data: dict) -> bool:
+        """
+        Save recent folders data to config file.
+
+        Args:
+            data: Dict with 'recent' list and 'last_active' string
+
+        Returns:
+            bool: True if saved successfully
+        """
+        try:
+            config_file = cls.get_recent_folders_path()
+            config_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            return True
+        except Exception:
+            return False
+
+    # ==================== LIFECYCLE STATUS ====================
+    # Status keys match SHOT_STATUSES values (case-insensitive lookup)
+    # 'none' = no status (for solo animators using as simple asset browser)
+    # Other statuses = pipeline workflow (for studios)
+    LIFECYCLE_STATUSES = {
+        'none': {'color': None, 'label': 'None'},  # No badge displayed
+        'wip': {'color': '#FF9800', 'label': 'WIP'},
+        'in review': {'color': '#2196F3', 'label': 'In Review'},
+        'needs work': {'color': '#FFC107', 'label': 'Needs Work'},
+        'approved': {'color': '#4CAF50', 'label': 'Approved'},
+        'final': {'color': '#9C27B0', 'label': 'Final'},
+        'blocked': {'color': '#F44336', 'label': 'Blocked'},
+    }
+
+    # ==================== REVIEW NOTES ====================
+    # Time format for displaying frame timestamps in review notes
+    TIME_FORMAT_FRAME: Final[str] = 'frame'       # Display as "f125"
+    TIME_FORMAT_TIMECODE: Final[str] = 'timecode'  # Display as "00:05:04"
+    DEFAULT_TIME_FORMAT: Final[str] = TIME_FORMAT_FRAME
+
+    # Review note marker colors
+    REVIEW_MARKER_UNRESOLVED: Final[str] = '#FF9800'  # Orange
+    REVIEW_MARKER_RESOLVED: Final[str] = '#4CAF50'    # Green (dimmed in UI)
+
+    @classmethod
+    def get_time_format(cls) -> str:
+        """Get the current time format preference."""
+        settings_file = cls.get_settings_file()
+        if settings_file.exists():
+            try:
+                import json
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    return settings.get('review_notes_time_format', cls.DEFAULT_TIME_FORMAT)
+            except Exception:
+                pass
+        return cls.DEFAULT_TIME_FORMAT
+
+    @classmethod
+    def set_time_format(cls, time_format: str) -> bool:
+        """Set the time format preference."""
+        if time_format not in (cls.TIME_FORMAT_FRAME, cls.TIME_FORMAT_TIMECODE):
+            return False
+        try:
+            import json
+            settings_file = cls.get_settings_file()
+            settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Load existing settings
+            settings = {}
+            if settings_file.exists():
+                try:
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                except Exception:
+                    pass
+
+            # Update setting
+            settings['review_notes_time_format'] = time_format
+
+            # Save back
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2)
+            return True
+        except Exception:
+            return False
+
+    # ==================== DELETION SETTINGS ====================
+    @classmethod
+    def load_allow_hard_delete(cls) -> bool:
+        """
+        Load the allow hard delete setting.
+
+        Returns:
+            bool: True if hard delete is allowed, False otherwise (default: False)
+        """
+        settings_file = cls.get_settings_file()
+        if settings_file.exists():
+            try:
+                import json
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    return settings.get('allow_hard_delete', False)
+            except Exception:
+                pass
+        return False
+
+    @classmethod
+    def save_allow_hard_delete(cls, allow: bool) -> bool:
+        """
+        Save the allow hard delete setting.
+
+        Args:
+            allow: True to allow permanent deletion, False otherwise
+
+        Returns:
+            bool: True if saved successfully, False otherwise
+        """
+        try:
+            import json
+            settings_file = cls.get_settings_file()
+            settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Load existing settings
+            settings = {}
+            if settings_file.exists():
+                try:
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                except Exception:
+                    pass
+
+            # Update setting
+            settings['allow_hard_delete'] = allow
+
+            # Save back
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def format_frame_timestamp(cls, frame: int, fps: int = 24, time_format: str = None) -> str:
+        """
+        Format a frame number as a timestamp string.
+
+        Args:
+            frame: Frame number
+            fps: Frames per second (for timecode conversion)
+            time_format: 'frame' or 'timecode' (uses preference if None)
+
+        Returns:
+            Formatted string like "f125" or "00:05:04"
+        """
+        if time_format is None:
+            time_format = cls.get_time_format()
+
+        if time_format == cls.TIME_FORMAT_TIMECODE:
+            # Convert frame to timecode (HH:MM:SS:FF or MM:SS)
+            total_seconds = frame / fps if fps > 0 else 0
+            minutes = int(total_seconds // 60)
+            seconds = int(total_seconds % 60)
+            frames = frame % fps if fps > 0 else 0
+
+            if minutes >= 60:
+                hours = minutes // 60
+                minutes = minutes % 60
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                return f"{minutes:02d}:{seconds:02d}"
+        else:
+            # Frame format
+            return f"f{frame}"
+
+
+# Export for convenient imports
+__all__ = ['Config']
