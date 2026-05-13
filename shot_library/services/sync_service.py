@@ -180,6 +180,11 @@ class SyncService(QObject):
         if existing_shot:
             status_to_use = existing_shot.get('status', 'WIP')
             display_mode_to_use = existing_shot.get('display_mode', 'playblast')
+            # Preserve user-managed v12 metadata across re-indexing
+            shot_dict['frame_in'] = existing_shot.get('frame_in')
+            shot_dict['frame_out'] = existing_shot.get('frame_out')
+            shot_dict['description'] = existing_shot.get('description', '')
+            shot_dict['priority'] = existing_shot.get('priority', 2)
         else:
             status_to_use = shot_dict.get('status', 'WIP')
             display_mode_to_use = shot_dict.get('display_mode', 'playblast')
@@ -188,6 +193,20 @@ class SyncService(QObject):
         shot_dict['status'] = status_to_use
         shot_dict['display_mode'] = display_mode_to_use
         shot_dict['preview_mode'] = display_mode_to_use
+
+        # Pass v12 metadata as None for existing shots (upsert.update skips None),
+        # so the preserved values above stay untouched. For new shots, pass the
+        # discovery defaults so they land in the INSERT path.
+        if existing_shot:
+            frame_in_val = None
+            frame_out_val = None
+            description_val = None
+            priority_val = None
+        else:
+            frame_in_val = shot_dict.get('frame_in')
+            frame_out_val = shot_dict.get('frame_out')
+            description_val = shot_dict.get('description')
+            priority_val = shot_dict.get('priority')
 
         result = self._db_service.shots.upsert(
             shot_id=shot_uuid,
@@ -209,6 +228,10 @@ class SyncService(QObject):
             shot_role=shot_dict.get('shot_role', 'standalone'),
             master_shot_id=shot_dict.get('master_shot_id'),
             view_name=shot_dict.get('view_name'),
+            frame_in=frame_in_val,
+            frame_out=frame_out_val,
+            description=description_val,
+            priority=priority_val,
         )
 
     def _sync_playblast_record(

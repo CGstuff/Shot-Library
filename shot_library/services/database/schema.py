@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 # Current schema version - starts fresh for Shot Library
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Feature descriptions for each version
 VERSION_FEATURES: Dict[int, List[str]] = {
@@ -80,6 +80,12 @@ VERSION_FEATURES: Dict[int, List[str]] = {
         "Supports folder-based versioning (Render/current/ and Render/_archive/)",
         "Tracks proxy MP4 generation for preview playback",
         "Stores render metadata (engine, samples, render time, resolution)",
+    ],
+    12: [
+        "Added frame_in / frame_out columns for shot frame range",
+        "Added description column for free-form shot notes",
+        "Added priority column (1=Low, 2=Normal, 3=High, 4=Critical)",
+        "Backfills frame_out from latest playblast frame_count where available",
     ],
 }
 
@@ -151,6 +157,8 @@ class SchemaManager:
                     self._migrate_to_v10(cursor)
                 if current_version < 11:
                     self._migrate_to_v11(cursor)
+                if current_version < 12:
+                    self._migrate_to_v12(cursor)
                 cursor.execute(
                     'INSERT OR REPLACE INTO schema_version (version) VALUES (?)',
                     (SCHEMA_VERSION,)
@@ -201,6 +209,12 @@ class SchemaManager:
                 -- Parse warnings (if name couldn't be fully parsed)
                 parse_warning TEXT,
 
+                -- Shot metadata expansion (v12 schema)
+                frame_in INTEGER,
+                frame_out INTEGER,
+                description TEXT DEFAULT '',
+                priority INTEGER DEFAULT 2,
+
                 -- Timestamps
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -216,6 +230,7 @@ class SchemaManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shots_is_latest ON shots(is_latest_shot_version)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shots_role ON shots(shot_role)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shots_master ON shots(master_shot_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_shots_priority ON shots(priority)')
 
         # ==================== PLAYBLASTS TABLE ====================
         # Versioned video previews for each shot
@@ -928,6 +943,56 @@ class SchemaManager:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_renders_version ON renders(shot_id, version)')
 
         logger.info("Schema migration v11: created renders table for image sequence management")
+
+    def _migrate_to_v12(self, cursor: sqlite3.Cursor):
+        """
+        Migrate from schema v11 to v12: Shot metadata expansion.
+
+        Adds columns to shots table:
+        - frame_in: First frame of shot (INTEGER, nullable)
+        - frame_out: Last frame of shot (INTEGER, nullable)
+        - description: Free-form shot notes (TEXT, default '')
+        - priority: 1=Low, 2=Normal, 3=High, 4=Critical (INTEGER, default 2)
+
+        Backfills frame range from latest playblast frame_count where available:
+        frame_in defaults to 1, frame_out to the playblast's frame_count.
+        """
+        cursor.execute("PRAGMA table_info(shots)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        if 'frame_in' not in existing_columns:
+            cursor.execute("ALTER TABLE shots ADD COLUMN frame_in INTEGER")
+        if 'frame_out' not in existing_columns:
+            cursor.execute("ALTER TABLE shots ADD COLUMN frame_out INTEGER")
+        if 'description' not in existing_columns:
+            cursor.execute("ALTER TABLE shots ADD COLUMN description TEXT DEFAULT ''")
+        if 'priority' not in existing_columns:
+            cursor.execute("ALTER TABLE shots ADD COLUMN priority INTEGER DEFAULT 2")
+
+        # Backfill frame range from latest playblast frame_count
+        cursor.execute('''
+            UPDATE shots
+            SET frame_in = 1,
+                frame_out = (
+                    SELECT frame_count FROM playblasts
+                    WHERE playblasts.shot_id = shots.id
+                      AND playblasts.is_latest = 1
+                    LIMIT 1
+                )
+            WHERE frame_in IS NULL
+              AND frame_out IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM playblasts
+                  WHERE playblasts.shot_id = shots.id
+                    AND playblasts.is_latest = 1
+                    AND playblasts.frame_count IS NOT NULL
+                    AND playblasts.frame_count > 0
+              )
+        ''')
+
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_shots_priority ON shots(priority)')
+
+        logger.info("Schema migration v12: added frame_in, frame_out, description, priority")
 
     def get_database_stats(self) -> Dict[str, Any]:
         """

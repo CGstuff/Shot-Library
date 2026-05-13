@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Shot Library",
     "author": "CG_stuff",
-    "version": (1, 0, 0),
+    "version": (0, 1, 0),
     "blender": (4, 0, 0),
     "location": "3D Viewport > Sidebar > Shot",
     "description": "Render playblasts from scene camera to PlayBlast folder with versioning",

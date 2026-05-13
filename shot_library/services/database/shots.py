@@ -48,6 +48,10 @@ class ShotRepository:
         shot_role: str = "standalone",
         master_shot_id: Optional[str] = None,
         view_name: Optional[str] = None,
+        frame_in: Optional[int] = None,
+        frame_out: Optional[int] = None,
+        description: str = "",
+        priority: int = 2,
     ) -> str:
         """
         Create a new shot record.
@@ -71,6 +75,10 @@ class ShotRepository:
             shot_role: 'standalone', 'master', or 'view'
             master_shot_id: For view shots, references the master shot
             view_name: For view shots, short suffix (e.g., 'cam01', 'ref02')
+            frame_in: First frame of shot (v12)
+            frame_out: Last frame of shot (v12)
+            description: Free-form shot notes (v12)
+            priority: 1=Low, 2=Normal, 3=High, 4=Critical (v12)
 
         Returns:
             UUID of created shot
@@ -86,14 +94,18 @@ class ShotRepository:
                     sequence_num, scene_num, shot_num, episode_num,
                     editorial_order, status, parse_warning,
                     base_shot_name, shot_version, version_group_id, is_latest_shot_version,
-                    display_mode, shot_role, master_shot_id, view_name, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    display_mode, shot_role, master_shot_id, view_name,
+                    frame_in, frame_out, description, priority,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 shot_id, folder_path, blend_file, shot_name,
                 sequence_num, scene_num, shot_num, episode_num,
                 editorial_order, status, parse_warning,
                 base_shot_name, shot_version, version_group_id, 1 if is_latest_shot_version else 0,
-                display_mode, shot_role, master_shot_id, view_name, now, now
+                display_mode, shot_role, master_shot_id, view_name,
+                frame_in, frame_out, description, priority,
+                now, now
             ))
 
         return shot_id
@@ -236,6 +248,10 @@ class ShotRepository:
         shot_role: Optional[str] = None,
         master_shot_id: Optional[str] = None,
         view_name: Optional[str] = None,
+        frame_in: Optional[int] = None,
+        frame_out: Optional[int] = None,
+        description: Optional[str] = None,
+        priority: Optional[int] = None,
     ) -> bool:
         """
         Update a shot record.
@@ -301,6 +317,18 @@ class ShotRepository:
         if view_name is not None:
             updates.append("view_name = ?")
             params.append(view_name)
+        if frame_in is not None:
+            updates.append("frame_in = ?")
+            params.append(frame_in)
+        if frame_out is not None:
+            updates.append("frame_out = ?")
+            params.append(frame_out)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if priority is not None:
+            updates.append("priority = ?")
+            params.append(priority)
 
         if not updates:
             return False
@@ -338,6 +366,10 @@ class ShotRepository:
         shot_role: str = "standalone",
         master_shot_id: Optional[str] = None,
         view_name: Optional[str] = None,
+        frame_in: Optional[int] = None,
+        frame_out: Optional[int] = None,
+        description: Optional[str] = None,
+        priority: Optional[int] = None,
     ) -> str:
         """
         Insert or update a shot by ID.
@@ -392,11 +424,18 @@ class ShotRepository:
                 shot_role=shot_role,
                 master_shot_id=master_shot_id,
                 view_name=view_name,
+                frame_in=frame_in,
+                frame_out=frame_out,
+                description=description,
+                priority=priority,
             )
             return shot_id
         else:
-            # Create new record with specific ID
+            # Create new record with specific ID. New shots take sane defaults
+            # for the v12 metadata fields when the caller didn't specify them.
             now = datetime.now().isoformat()
+            new_description = "" if description is None else description
+            new_priority = 2 if priority is None else priority
 
             with self._conn.transaction() as conn:
                 cursor = conn.cursor()
@@ -406,17 +445,38 @@ class ShotRepository:
                         sequence_num, scene_num, shot_num, episode_num,
                         editorial_order, status, parse_warning,
                         base_shot_name, shot_version, version_group_id, is_latest_shot_version,
-                        display_mode, shot_role, master_shot_id, view_name, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        display_mode, shot_role, master_shot_id, view_name,
+                        frame_in, frame_out, description, priority,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     shot_id, folder_path, blend_file, shot_name,
                     sequence_num, scene_num, shot_num, episode_num,
                     editorial_order, status, parse_warning,
                     base_shot_name, shot_version, version_group_id, 1 if is_latest_shot_version else 0,
-                    display_mode, shot_role, master_shot_id, view_name, now, now
+                    display_mode, shot_role, master_shot_id, view_name,
+                    frame_in, frame_out, new_description, new_priority,
+                    now, now
                 ))
 
             return shot_id
+
+    def bulk_set_priority(self, shot_ids: List[str], priority: int) -> int:
+        """Set the same priority on many shots in one transaction.
+
+        Returns the number of rows updated.
+        """
+        if not shot_ids:
+            return 0
+        now = datetime.now().isoformat()
+        with self._conn.transaction() as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join('?' for _ in shot_ids)
+            cursor.execute(
+                f"UPDATE shots SET priority = ?, updated_at = ? WHERE id IN ({placeholders})",
+                [priority, now, *shot_ids],
+            )
+            return cursor.rowcount
 
     def delete(self, shot_id: str) -> bool:
         """

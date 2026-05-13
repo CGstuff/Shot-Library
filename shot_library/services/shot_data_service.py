@@ -292,6 +292,60 @@ class ShotDataService(QObject):
         except Exception as e:
             return False
 
+    def bulk_set_priority(
+        self,
+        shot_uuids: List[str],
+        priority: int,
+        audit_service=None,
+    ) -> int:
+        """Apply the same priority to many shots in one transaction.
+
+        Returns count of rows updated. Audits each change individually so the
+        audit trail records per-shot before/after values.
+        """
+        if not shot_uuids or priority not in (1, 2, 3):
+            return 0
+        try:
+            # Snapshot the previous values BEFORE the write so we can emit
+            # accurate audit entries.
+            previous: Dict[str, Dict[str, Any]] = {}
+            for uuid in shot_uuids:
+                shot = self.get_shot(uuid)
+                if shot and shot.get('priority', 2) != priority:
+                    previous[uuid] = shot
+
+            if not previous:
+                return 0
+
+            count = self._db_service.shots.bulk_set_priority(list(previous.keys()), priority)
+
+            if count > 0:
+                if audit_service:
+                    from .audit_service import AuditAction, AuditEntityType
+                    for uuid, shot in previous.items():
+                        try:
+                            audit_service.log_event(
+                                entity_type=AuditEntityType.SHOT,
+                                entity_id=uuid,
+                                action=AuditAction.UPDATED,
+                                entity_name=shot.get('shot_name') or 'Unknown',
+                                field_changed='priority',
+                                old_value=shot.get('priority', 2),
+                                new_value=priority,
+                            )
+                        except Exception:
+                            pass
+
+                changed_uuids = list(previous.keys())
+                self.shots_bulk_updated.emit(changed_uuids)
+                for uuid in changed_uuids:
+                    self._event_bus.metadata_changed.emit(uuid)
+                    self._event_bus.animation_updated.emit(uuid)
+
+            return count
+        except Exception:
+            return 0
+
     def update_display_mode(self, shot_uuid: str, mode: str) -> bool:
         """
         Update shot display mode (playblast/lookdev/render).

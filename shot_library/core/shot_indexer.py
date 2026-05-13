@@ -28,6 +28,7 @@ from .editorial_order import (
 from .shot_version_parser import (
     parse_shot_version,
     generate_version_group_id,
+    ShotVersionInfo,
 )
 
 
@@ -61,6 +62,11 @@ class ParsedShotIdentity:
     shot_role: str = "standalone"  # 'standalone', 'master', or 'view'
     master_blend_file: Optional[str] = None  # For views, path to master blend file
     view_name: Optional[str] = None  # For views, e.g., "ref01", "cam02"
+    # Shot metadata expansion (v12) — user-managed fields not parsed from filesystem
+    frame_in: Optional[int] = None
+    frame_out: Optional[int] = None
+    description: str = ""
+    priority: int = 2  # 1=Low, 2=Normal, 3=High, 4=Critical
 
 
 @dataclass
@@ -343,9 +349,25 @@ class ShotIndexer(QObject):
         """
         blend_stem = blend_file.stem  # e.g., "SH0010_v002"
 
-        # Parse version info FIRST to get base name without version suffix
-        # This ensures each blend file gets its own version number
-        version_info = parse_shot_version(blend_stem)
+        # Determine base_name + version for grouping.
+        #
+        # Priority 1: if the user's schema blend_file_patterns captured BOTH
+        # (?P<shot>...) and (?P<version>...) groups, use them. This is what
+        # makes custom naming conventions (e.g. "myshot.001.blend") group
+        # into version families correctly — without this, only the hardcoded
+        # _v###/-v###/.v### patterns work for grouping.
+        #
+        # Priority 2: fall back to parse_shot_version which knows the standard
+        # _v###/-v###/.v### industry conventions. Catches the common case
+        # where the schema regex captures only `shot` (default schema does this).
+        if parsed_filename.shot and parsed_filename.version is not None:
+            version_info = ShotVersionInfo(
+                base_name=parsed_filename.shot,
+                version=parsed_filename.version,
+                original_name=blend_stem,
+            )
+        else:
+            version_info = parse_shot_version(blend_stem)
 
         # Use base shot name for display (e.g., "SH0010" not "SH0010_v002")
         # Fall back to folder name if no base name extracted

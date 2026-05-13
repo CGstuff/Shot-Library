@@ -16,7 +16,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QLabel, QPushButton, QFileDialog, QMessageBox,
-    QProgressDialog
+    QProgressDialog, QSpinBox, QComboBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
@@ -95,6 +95,9 @@ class LibraryTab(QWidget):
         # Database Info Group
         layout.addWidget(self._create_database_section())
 
+        # Project Settings Group (v12: project_resolution)
+        layout.addWidget(self._create_project_settings_section())
+
         # Export Group
         layout.addWidget(self._create_export_section())
 
@@ -137,6 +140,126 @@ class LibraryTab(QWidget):
         group_layout.addWidget(open_btn)
 
         return group
+
+    def _create_project_settings_section(self):
+        """Project-level settings (v12: render resolution).
+
+        Stored in the per-project app_settings table so it travels with the
+        .meta folder and other apps (Pipeline Control) can read it.
+        """
+        group = QGroupBox("Project Settings")
+        group_layout = QVBoxLayout(group)
+
+        desc = QLabel(
+            "Final delivery resolution for this project. "
+            "Displayed in the Shot Info panel so reviewers know the intended "
+            "render target — independent of playblast preview resolution."
+        )
+        desc.setWordWrap(True)
+        group_layout.addWidget(desc)
+
+        group_layout.addSpacing(6)
+
+        db_service = get_database_service()
+        try:
+            width = int(db_service.get_app_setting('project_resolution_width', '0') or '0')
+        except (TypeError, ValueError):
+            width = 0
+        try:
+            height = int(db_service.get_app_setting('project_resolution_height', '0') or '0')
+        except (TypeError, ValueError):
+            height = 0
+
+        # Preset dropdown + W × H spinboxes on one row.
+        row = QHBoxLayout()
+
+        self._resolution_preset = QComboBox()
+        self._resolution_preset.addItem("Custom", (0, 0))
+        for label, w, h in (
+            ("HD 1080p (1920×1080)", 1920, 1080),
+            ("QHD 1440p (2560×1440)", 2560, 1440),
+            ("UHD 4K (3840×2160)", 3840, 2160),
+            ("DCI 4K (4096×2160)", 4096, 2160),
+            ("8K (7680×4320)", 7680, 4320),
+        ):
+            self._resolution_preset.addItem(label, (w, h))
+        self._resolution_preset.currentIndexChanged.connect(self._on_resolution_preset_changed)
+        row.addWidget(self._resolution_preset)
+
+        row.addSpacing(8)
+
+        self._width_spin = QSpinBox()
+        self._width_spin.setRange(0, 32768)
+        self._width_spin.setSuffix(" px")
+        self._width_spin.setMaximumWidth(110)
+        self._width_spin.setSpecialValueText("—")  # 0 displays as em dash = unset
+        self._width_spin.setValue(width)
+        self._width_spin.editingFinished.connect(self._on_resolution_changed)
+        row.addWidget(self._width_spin)
+
+        row.addWidget(QLabel("×"))
+
+        self._height_spin = QSpinBox()
+        self._height_spin.setRange(0, 32768)
+        self._height_spin.setSuffix(" px")
+        self._height_spin.setMaximumWidth(110)
+        self._height_spin.setSpecialValueText("—")
+        self._height_spin.setValue(height)
+        self._height_spin.editingFinished.connect(self._on_resolution_changed)
+        row.addWidget(self._height_spin)
+
+        row.addStretch()
+
+        group_layout.addLayout(row)
+
+        # Sync preset selector with the loaded values
+        self._sync_preset_from_values(width, height)
+
+        hint = QLabel("Set to 0 × 0 to leave unset (Shot Info will fall back to playblast pixels).")
+        self._apply_secondary_style(hint)
+        group_layout.addWidget(hint)
+
+        return group
+
+    def _sync_preset_from_values(self, width: int, height: int):
+        """Select the matching preset, or 'Custom' when no preset matches."""
+        match_idx = 0  # Custom
+        for i in range(self._resolution_preset.count()):
+            data = self._resolution_preset.itemData(i)
+            if data and data == (width, height):
+                match_idx = i
+                break
+        self._resolution_preset.blockSignals(True)
+        self._resolution_preset.setCurrentIndex(match_idx)
+        self._resolution_preset.blockSignals(False)
+
+    def _on_resolution_preset_changed(self, _idx: int):
+        """Apply a preset to the W/H spinboxes and persist."""
+        data = self._resolution_preset.currentData()
+        if not data:
+            return
+        w, h = data
+        if w == 0 and h == 0:
+            # 'Custom' chosen — don't overwrite current values
+            return
+        self._width_spin.blockSignals(True)
+        self._height_spin.blockSignals(True)
+        self._width_spin.setValue(w)
+        self._height_spin.setValue(h)
+        self._width_spin.blockSignals(False)
+        self._height_spin.blockSignals(False)
+        self._persist_resolution()
+
+    def _on_resolution_changed(self):
+        """Persist when either spinbox edit completes."""
+        self._sync_preset_from_values(self._width_spin.value(), self._height_spin.value())
+        self._persist_resolution()
+
+    def _persist_resolution(self):
+        """Save the current W/H to app_settings."""
+        db_service = get_database_service()
+        db_service.set_app_setting('project_resolution_width', str(self._width_spin.value()))
+        db_service.set_app_setting('project_resolution_height', str(self._height_spin.value()))
 
     def _create_export_section(self):
         """Create export section"""

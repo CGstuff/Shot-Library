@@ -262,6 +262,12 @@ class DiscoveryService(QObject):
             'view_name': shot.identity.view_name,
             'master_shot_id': None,  # Resolved by sync_service
             'view_count': 0,
+            # Shot metadata expansion (v12) — user-managed; defaults for new shots,
+            # sync_service preserves existing values via shot_dict carryover
+            'frame_in': shot.identity.frame_in,
+            'frame_out': shot.identity.frame_out,
+            'description': shot.identity.description,
+            'priority': shot.identity.priority,
         }
 
     def _enrich_with_playblasts(

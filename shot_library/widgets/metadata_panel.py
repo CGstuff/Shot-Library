@@ -139,6 +139,7 @@ class MetadataPanel(QWidget):
 
         # Create info sections (Shot Library specific)
         self._shot_identity_section = self._create_section("Shot Identity")
+        self._shot_info_section = self._create_section("Shot Info")  # v12: read-only frame range + description
         self._technical_section, self._technical_section_title = self._create_section_with_title("Playblast Info")
         self._assignment_section = self._create_assignment_section()
         self._file_section = self._create_section("Files")
@@ -434,6 +435,25 @@ class MetadataPanel(QWidget):
         status_layout.addStretch()
         layout.addWidget(status_widget)
 
+        # Priority row (v12) — sits directly below status, same shape.
+        priority_widget = QWidget()
+        priority_layout = QHBoxLayout(priority_widget)
+        priority_layout.setContentsMargins(8, 4, 8, 4)
+        priority_layout.setSpacing(8)
+
+        priority_text = QLabel("Priority:")
+        priority_text.setStyleSheet("font-weight: bold;")
+        priority_layout.addWidget(priority_text)
+
+        self._priority_badge = QPushButton("NORMAL")
+        self._priority_badge.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._priority_badge.clicked.connect(self._on_priority_badge_clicked)
+        self._update_priority_badge_style(2)
+        priority_layout.addWidget(self._priority_badge)
+
+        priority_layout.addStretch()
+        layout.addWidget(priority_widget)
+
         # View History button
         self._history_btn = QPushButton("View Lineage")
         self._history_btn.clicked.connect(self._on_view_history_clicked)
@@ -720,6 +740,7 @@ class MetadataPanel(QWidget):
         content_layout.addWidget(self._pose_actions_section)
         content_layout.addWidget(self._camera_views_section)  # Multi-camera views section
         content_layout.addWidget(self._shot_identity_section)  # Shot-specific section
+        content_layout.addWidget(self._shot_info_section)  # v12: frame range, priority, description
         content_layout.addWidget(self._assignment_section)  # Task assignment section
         content_layout.addWidget(self._technical_section)
         content_layout.addWidget(self._description_label)
@@ -802,16 +823,15 @@ class MetadataPanel(QWidget):
         # Load video preview based on preview mode
         self._update_video_preview()
 
-        # Update description
-        description = animation.get('description', '')
-        if description:
-            self._description_label.setText(description)
-            self._description_label.show()
-        else:
-            self._description_label.hide()
+        # Description now lives in the Shot Info section (v12). Keep the legacy
+        # standalone label hidden to avoid duplication.
+        self._description_label.hide()
 
         # Update shot identity section (Shot Library specific)
         self._update_shot_identity_section()
+
+        # Update shot info section (v12: frame range, priority, description)
+        self._update_shot_info_section()
 
         # Update technical info (playblast info for shots)
         self._update_technical_section()
@@ -843,6 +863,8 @@ class MetadataPanel(QWidget):
 
         # Clear sections
         self._clear_section(self._shot_identity_section)
+        self._clear_section(self._shot_info_section)
+        self._shot_info_section.hide()
         self._clear_section(self._technical_section)
         self._clear_section(self._file_section)
 
@@ -852,6 +874,7 @@ class MetadataPanel(QWidget):
         self._version_count_label.setText("")
         self._history_btn.setEnabled(False)
         self._update_status_badge_style('none')  # Reset status badge
+        self._update_priority_badge_style(2)  # Reset priority badge to NORMAL
         self._update_mode_buttons_style('playblast')  # Reset preview mode buttons
 
         # Hide pose actions section
@@ -947,6 +970,115 @@ class MetadataPanel(QWidget):
         # Show/hide section based on whether we have shot data
         self._shot_identity_section.setVisible(has_shot_data)
 
+    def _get_project_resolution(self) -> tuple:
+        """Read the project's configured render resolution from app_settings.
+
+        Returns (width, height) — both 0 when unset. One SELECT against the
+        per-project DB, called once per shot selection.
+        """
+        try:
+            db = self._db_service or get_database_service()
+            w = int(db.get_app_setting('project_resolution_width', '0') or '0')
+            h = int(db.get_app_setting('project_resolution_height', '0') or '0')
+            return (w, h)
+        except (TypeError, ValueError, Exception):
+            return (0, 0)
+
+    def _update_shot_info_section(self):
+        """Render Shot Info as read-only labels (v12 schema).
+
+        Shot Library never authors shot metadata. Frame range / description live
+        on the shot row; fps / duration / resolution come from the latest
+        playblast (they're file-truth metadata, not shot-truth). Priority lives
+        in the Lineage section as a colored badge below Status.
+        """
+        if not self._animation or self._analysis_mode:
+            self._shot_info_section.hide()
+            return
+
+        grid = self._shot_info_section.property("grid")
+        self._clear_grid(grid)
+
+        frame_in = self._animation.get('frame_in')
+        frame_out = self._animation.get('frame_out')
+        description = (self._animation.get('description') or '').strip()
+
+        # Pull playback metadata from the latest playblast — fps, duration and
+        # resolution live on the playblasts table, not on shots.
+        fps = None
+        duration_seconds = None
+        width = None
+        height = None
+        frame_count = None
+        shot_uuid = self._animation.get('uuid') or self._animation.get('id')
+        if shot_uuid:
+            try:
+                pb = self._get_shot_data_service().get_latest_playblast(shot_uuid)
+            except Exception:
+                pb = None
+            if pb:
+                fps = pb.get('fps')
+                frame_count = pb.get('frame_count')
+                duration_ms = pb.get('duration_ms')
+                if duration_ms:
+                    duration_seconds = duration_ms / 1000.0
+                elif frame_count and fps:
+                    duration_seconds = frame_count / fps
+                width = pb.get('width')
+                height = pb.get('height')
+
+        row = 0
+        has_data = False
+
+        if fps:
+            fps_text = f"{fps:g}" if isinstance(fps, float) else str(fps)
+            self._add_info_row(grid, row, "FPS:", fps_text)
+            row += 1
+            has_data = True
+
+        if frame_in is not None and frame_out is not None:
+            self._add_info_row(grid, row, "Frame Range:", f"{frame_in} → {frame_out}")
+            row += 1
+            has_data = True
+        elif frame_count:
+            self._add_info_row(grid, row, "Frame Count:", str(frame_count))
+            row += 1
+            has_data = True
+
+        if duration_seconds:
+            self._add_info_row(grid, row, "Duration:", f"{duration_seconds:.2f}s")
+            row += 1
+            has_data = True
+
+        # Resolution: prefer the configured project resolution (Settings →
+        # Backup → Project Settings). The playblast pixels are demoted to a
+        # parenthetical so the user can tell when their preview is a
+        # downscaled proxy of a higher-res render.
+        proj_w, proj_h = self._get_project_resolution()
+        if proj_w and proj_h:
+            text = f"{proj_w}×{proj_h}"
+            if width and height and (width != proj_w or height != proj_h):
+                pct = round((width / proj_w) * 100) if proj_w else None
+                if pct and pct != 100:
+                    text += f"  (preview: {width}×{height} @ {pct}%)"
+                else:
+                    text += f"  (preview: {width}×{height})"
+            self._add_info_row(grid, row, "Resolution:", text)
+            row += 1
+            has_data = True
+        elif width and height:
+            # No project resolution configured — show playblast pixels as-is.
+            self._add_info_row(grid, row, "Resolution:", f"{width}×{height}")
+            row += 1
+            has_data = True
+
+        if description:
+            self._add_info_row(grid, row, "Description:", description)
+            row += 1
+            has_data = True
+
+        self._shot_info_section.setVisible(has_data)
+
     def _update_technical_section(self):
         """Update technical information section based on preview mode and analysis mode"""
 
@@ -1035,23 +1167,8 @@ class MetadataPanel(QWidget):
                 self._add_info_row(grid, row, "Total Versions:", str(playblast_count))
                 row += 1
 
-        # Frame count
-        frame_count = self._animation.get('frame_count')
-        if frame_count:
-            self._add_info_row(grid, row, "Frame Count:", str(frame_count))
-            row += 1
-
-        # FPS
-        fps = self._animation.get('fps')
-        if fps:
-            self._add_info_row(grid, row, "FPS:", str(fps))
-            row += 1
-
-        # Duration
-        duration = self._animation.get('duration_seconds')
-        if duration:
-            self._add_info_row(grid, row, "Duration:", f"{duration:.2f}s")
-            row += 1
+        # Frame count / FPS / Duration now live in the Shot Info section
+        # (sourced from the latest playblast). Don't duplicate them here.
 
     def _update_file_section(self):
         """Update file information section"""
@@ -1297,6 +1414,9 @@ class MetadataPanel(QWidget):
         # Update status badge
         status = self._animation.get('status', 'none')
         self._update_status_badge_style(status)
+
+        # Update priority badge (v12)
+        self._update_priority_badge_style(self._animation.get('priority', 2))
 
         # Update per-shot preview mode button
         shot_mode = self._animation.get('preview_mode') or self._animation.get('display_mode', 'playblast')
@@ -1977,6 +2097,69 @@ class MetadataPanel(QWidget):
             # This prevents the shot from disappearing if a status filter is active
             self._event_bus.filter_changed.emit({'add_status': status})
 
+    # ==================== PRIORITY BADGE (v12) ====================
+
+    # 1=Low (green), 2=Normal (blue), 3=Urgent (red)
+    _PRIORITY_COLORS = {1: '#4CAF50', 2: '#5b8cc9', 3: '#F44336'}
+    _PRIORITY_LABELS = {1: 'LOW', 2: 'NORMAL', 3: 'URGENT'}
+
+    def _update_priority_badge_style(self, priority: int):
+        """Style the priority badge with a color matching its level."""
+        priority = int(priority) if priority in (1, 2, 3) else 2
+        color = self._PRIORITY_COLORS[priority]
+        label = self._PRIORITY_LABELS[priority]
+        badge_font = get_font_stylesheet(Fonts.BUTTON)
+        self._priority_badge.setText(label)
+        self._priority_badge.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color};
+                color: white;
+                padding: 4px 10px;
+                border-radius: 0px;
+                {badge_font}
+                border: none;
+            }}
+            QPushButton:hover {{
+                background-color: {color};
+                border: 2px solid white;
+            }}
+        """)
+
+    def _on_priority_badge_clicked(self):
+        """Open priority selection menu below the badge."""
+        if not self._animation:
+            return
+
+        menu = QMenu(self)
+        current = self._animation.get('priority', 2)
+        for value in (1, 2, 3):
+            action = menu.addAction(self._PRIORITY_LABELS[value].title())
+            action.setData(value)
+            if value == current:
+                action.setCheckable(True)
+                action.setChecked(True)
+            action.triggered.connect(lambda _checked=False, v=value: self._on_priority_selected(v))
+
+        menu.exec(self._priority_badge.mapToGlobal(
+            self._priority_badge.rect().bottomLeft()
+        ))
+
+    def _on_priority_selected(self, priority: int):
+        """Apply selected priority to the current shot via the bulk service."""
+        if not self._animation:
+            return
+        shot_uuid = self._animation.get('uuid') or self._animation.get('id')
+        if not shot_uuid:
+            return
+        if self._animation.get('priority', 2) == priority:
+            return
+
+        shot_data_service = self._get_shot_data_service()
+        audit_service = self._audit_service if hasattr(self, '_audit_service') else None
+        if shot_data_service.bulk_set_priority([shot_uuid], priority, audit_service=audit_service):
+            self._animation['priority'] = priority
+            self._update_priority_badge_style(priority)
+
     def _on_pb_mode_clicked(self):
         """Handle PB button click in metadata panel"""
         self._set_shot_preview_mode('playblast')
@@ -2176,6 +2359,7 @@ class MetadataPanel(QWidget):
 
         # Shot mode sections - hidden in analysis mode
         self._shot_identity_section.setVisible(not is_analysis)
+        self._shot_info_section.setVisible(not is_analysis)
         self._file_section.setVisible(not is_analysis)
 
         # Version section (Lineage with version/status info) - hidden in analysis mode

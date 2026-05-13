@@ -1252,12 +1252,35 @@ class MainWindow(QMainWindow):
 
         name = shot_data.get('shot_name', 'Unknown Shot')
 
+        # Determine the target set: full multi-selection if the right-clicked
+        # shot is part of it, otherwise just the right-clicked shot.
+        selected_uuids = self._animation_view.get_selected_uuids()
+        if uuid in selected_uuids and len(selected_uuids) > 1:
+            target_uuids = selected_uuids
+        else:
+            target_uuids = [uuid]
+
         # Create context menu
         menu = QMenu(self)
 
         # View Lineage action - opens version history dialog
         lineage_action = menu.addAction("View Lineage")
         lineage_action.triggered.connect(lambda: self._show_version_history(uuid))
+
+        menu.addSeparator()
+
+        # Set Priority submenu (v12) — works on the full selection
+        priority_menu_label = (
+            f"Set Priority for {len(target_uuids)} shots"
+            if len(target_uuids) > 1
+            else "Set Priority"
+        )
+        priority_menu = menu.addMenu(priority_menu_label)
+        for label, value in (("Low", 1), ("Normal", 2), ("Urgent", 3)):
+            action = priority_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, v=value, ids=list(target_uuids): self._on_bulk_priority_set(ids, v)
+            )
 
         menu.addSeparator()
 
@@ -1270,6 +1293,20 @@ class MainWindow(QMainWindow):
 
         # Show menu at cursor position
         menu.exec(position)
+
+    def _on_bulk_priority_set(self, shot_uuids: list, priority: int):
+        """Apply a priority value to many shots and surface the result count."""
+        shot_data_service = get_shot_data_service()
+        audit_service = getattr(self, '_audit_service', None)
+        count = shot_data_service.bulk_set_priority(shot_uuids, priority, audit_service=audit_service)
+        priority_label = {1: 'Low', 2: 'Normal', 3: 'Urgent'}.get(priority, str(priority))
+        if count > 0:
+            self._status_bar.showMessage(
+                f"{count} shot{'s' if count != 1 else ''} updated to priority {priority_label}",
+                5000,
+            )
+        else:
+            self._status_bar.showMessage("No priority changes applied", 3000)
 
     def _on_scan_folder_requested(self, folder_path: str):
         """
